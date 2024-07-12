@@ -1,0 +1,180 @@
+function updateDropdown() {
+  var form = FormApp.openById('1iidkmQol2HBh0pRLvHmSb4zvUyeVgOFpdZixpGhW_ZE');
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Current Members');
+
+  var coachData = sheet.getRange('C2:C').getValues();
+  var coachNames = coachData.flat().filter(String);
+
+  var studentData = sheet.getRange('A2:A').getValues();
+  var studentNames = studentData.flat().filter(String);
+
+  var formItems = form.getItems(FormApp.ItemType.LIST);
+  var coachItem = formItems[0].asListItem();
+  var studentItem = formItems[1].asListItem();
+
+  coachItem.setChoiceValues(coachNames);
+  studentItem.setChoiceValues(studentNames);
+
+  console.log('Coaches and students updated.')
+}
+
+function clearFormResponses(){
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Form Responses');
+  const lastRow = sheet.getLastRow();
+
+  if (lastRow > 1){
+    sheet.deleteRows(2, + lastRow-1)
+  }
+}
+
+function onFormSubmit(e) {
+  var formResponse = e.values;
+  var student = e.namedValues['Student']
+  
+  student = String(student);
+
+  Logger.log(student);
+
+
+  updateLessonCount(student)
+}
+
+function updateLessonCount(student){
+  var dataSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Current Members');
+  var form=FormApp.openById('1iidkmQol2HBh0pRLvHmSb4zvUyeVgOFpdZixpGhW_ZE');
+  var data = form.getItems()[1];
+  
+  var studentRange = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Current Members').getRange('A2:A');
+  var values = studentRange.getValues();
+
+  console.log('loop begin');
+  console.log(values[0])
+
+  for(var i = 0; i < values.length; i++){
+      if(values[i] == student){
+        console.log('lesson count updated for ' + student);
+        var lessonRange = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Current Members').getRange(i+2,2);
+        lessonRange.setValue(lessonRange.getValue()-1);
+      }
+    }
+  }
+function getStripeCustomers(){
+  const url = 'https://api.stripe.com/v1/customers';
+  
+  const options = 
+  {
+    method: 'get',
+    headers: {
+      'Authorization': 'Bearer ' + STRIPE_TEST_KEY
+    }
+  };
+
+  const response = UrlFetchApp.fetch(url, options);
+  const data = JSON.parse(response.getContentText());
+
+  Logger.log(data);
+
+  return data;
+}
+
+function getStripePayments(limit = 50, startingAfter =null){
+  let url = `https://api.stripe.com/v1/charges?limit=${limit}`
+  if(startingAfter){
+    url += `&starting_after=${startingAfter}`;
+  }
+
+  const options = {
+    method: 'get',
+    headers: {
+      'Authorization': 'Bearer '+ STRIPE_TEST_KEY
+    }
+  };
+
+  const response = UrlFetchApp.fetch(url, options);
+  const data = JSON.parse(response.getContentText());
+
+  Logger.log(data);
+
+  return data;
+}
+
+function getCustomerDetails(customerID){
+  let url = `https://api.stripe.com/v1/customers/${customerID}`
+
+  const options = {
+    method: 'get',
+    headers: {
+      'Authorization': 'Bearer '+ STRIPE_TEST_KEY
+    }
+  };
+
+  const response = UrlFetchApp.fetch(url, options);
+  const data = JSON.parse(response.getContentText());
+
+  Logger.log(data);
+
+  return data;
+}
+
+function insertPaymentIntoSheet(){
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Test Purchases');
+  sheet.clear();
+
+  const headers = ['ID','Customer Name','Customer ID', 'Amount', 'Currency', 'Created', 'Description', 'Status'];
+  sheet.appendRow(headers);
+
+  let startingAfter = null;
+  let hasMore = true;
+
+  while (hasMore){
+    const payments =getStripePayments(50, startingAfter);
+
+    payments.data.forEach(payment => {
+      let customerName = '';
+      let customerID = '';
+
+      if(payment.customer) {
+        const customerDetails = getCustomerDetails(payment.customer);
+        customerName = customerDetails.name || customerDetails.email;
+        customerID = payment.customer;
+      }
+      const row = [
+        payment.id,
+        customerName,
+        customerID,
+        payment.amount / 100,
+        payment.currency,
+        new Date(payment.created * 1000),
+        payment.description,
+        payment.Status
+      ];
+      sheet.appendRow(row);
+    });
+
+    hasMore=payments.has_more;
+    if(hasMore) {
+      startingAfter= payments.data[payments.data.length - 1].id;
+    }
+  }
+}
+
+function insertCustomersIntoSheet(){
+  const customers = getStripeCustomers();
+
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Lesson Purchases');
+  sheet.clear();
+
+  const headers = ['ID', 'Email', 'Created', 'Description'];
+  sheet.appendRow(headers);
+
+  customers.data.forEach(customer => {
+    const row = [
+      customer.id,
+      customer.email,
+      new Date(customer.created * 1000),
+      customer.Description
+    ];
+
+    sheet.appendRow(row);
+  })
+}
