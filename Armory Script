@@ -1,0 +1,171 @@
+function updateDropdown() {
+  var form = FormApp.openById('1CB426y1jDCvhdtqNLgC-lf4qCK001D4OKA4ZBRvg1Wg');
+  var serviceSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Price List');
+  var memberSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Current Members');
+
+  var serviceData = serviceSheet.getRange('A2:A').getValues();
+  var serviceNames = serviceData.flat().filter(String);
+
+
+  var studentData = memberSheet.getRange('A2:A').getValues();
+  var studentNames = studentData.flat().filter(String);
+
+  var formItems = form.getItems(FormApp.ItemType.LIST);
+  var studentItem = formItems[1].asListItem();
+  var serviceItem = formItems[2].asListItem();
+
+  studentItem.setChoiceValues(studentNames);
+  serviceItem.setChoiceValues(serviceNames);
+
+  console.log('Students and services updated.')
+}
+
+function getCSV(){
+  const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Copy of Services Tracking');
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+
+  Logger.log(values.slice(1));
+
+  return values.slice(1);
+}
+
+function getCustomerPaymentMethods(customerId) {
+  try {
+    const apiUrl = 'https://api.stripe.com/v1/payment_methods';
+    const options = {
+      method: 'get',
+      headers: {
+        'Authorization': 'Bearer ' + STRIPE_TEST_KEY,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      muteHttpExceptions: true,
+    };
+
+    const queryString = '?customer=' + encodeURIComponent(customerId) + '&type=card';
+    Logger.log('Fetching payment methods for customer ID: ' + customerId);
+    const response = UrlFetchApp.fetch(apiUrl + queryString, options);
+
+    const responseData = JSON.parse(response.getContentText());
+    Logger.log('Response data: ' + JSON.stringify(responseData));
+
+    if (responseData.data && responseData.data.length > 0) {
+      const paymentMethodId = responseData.data[0].id;
+      Logger.log('Payment method ID: ' + paymentMethodId);
+      return paymentMethodId;
+    } else {
+      throw new Error('No card found for customer: ' + customerId);
+    }
+  } catch (error) {
+    Logger.log('Error retrieving customer payment methods: ' + error.message);
+    throw error;
+  }
+}
+
+function createPayment(customer, paymentMethodId, amount, description){
+  const url = 'https://api.stripe.com/v1/payment_intents';
+
+  
+    const payload={
+      amount: (amount*100).toFixed(0),
+      currency: 'usd',
+      description: description,
+      customer: customer,
+      payment_method: paymentMethodId,
+      confirm: true,
+  };
+
+  const options = {
+    method: 'post',
+    headers: {
+      'Authorization': 'Bearer ' + STRIPE_TEST_KEY,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      payload: payload,
+      muteHttpExceptions: true,
+    }
+
+  try {
+    const response = UrlFetchApp.fetch(url, options);
+    const responseData = response.getContentText();
+
+    if (response.getResponseCode() !== 200) {
+      throw new Error('Non-200 response from Stripe: ' + response.getResponseCode());
+    }
+
+    const data = JSON.parse(responseData);
+    return data;
+  } catch (error) {
+    Logger.log('Error creating PaymentIntent:', error);
+    if (error.message) {
+      Logger.log('Error message:', error.message);
+    }
+    throw error;
+  }
+}
+
+function processFromCSV(){
+  try{
+    const sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Copy of Services Tracking');
+    const destinationSheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('Completed');
+
+    const data = sheet.getDataRange().getValues();
+
+    if(data.length <=1){
+      Logger.log('No data found/only header present.');
+      return;
+    }
+
+    const successfulCustomers =[];
+
+    const headerRow = data[0];
+    const columnIndex = headerRow.reduce((acc, colName, index) => {
+      acc[colName] = index;
+      return acc;
+    }, {});
+
+    for(let i = 1; i < data.length; i++){
+      const amount = data[i][columnIndex['Net Cost']];
+      const customer = data[i][columnIndex['Customer ID']];
+      const description = data[i][columnIndex['Description']];
+
+      if(!customer || !description || !amount){
+        continue;
+      }
+
+      try{
+        const paymentMethodId = getCustomerPaymentMethods(customer);
+        Logger.log('Customer ID: ' +customer);
+
+        createPayment(customer, paymentMethodId, amount, description);
+        successfulCustomers.push(customer);
+      } catch (error){
+        Logger.log('Error processing payment for customer ' + customer + ' in row ' + (i + 1) + ': ' + error.message);
+      }
+    }
+
+    if (successfulCustomers.length > 0) {
+      Logger.log('Payments created for customer IDs: ' +successfulCustomers.join(', '));
+    } else{
+      Logger.log('No payments created');
+    }
+
+    const filteredData = data.filter(row=> row.some(cell => cell !== ''));
+
+    if(filteredData.length > 1){
+      const destinationRange = destinationSheet.getRange(destinationSheet.getLastRow() + 1, 1, filteredData.length-1,filteredData[0].length);
+      destinationRange.setValues(filteredData.slice(1));
+      Logger.log('Successfully copied ' +(filteredData.length -1) +' rows of data to Completed sheet.');
+    } else{
+      Logger.log('Copy process failed. No data rows found to copy.');
+    }
+
+    var rangeList1 = sheet.getRangeList(['A2:A','B2:B','C2:C','D2:D','E2:E','F2:F','G2:G','H2:H','I2:I','J2:J','K2:K','L2:L']);
+    rangeList1.setValue("");
+
+  }catch (error) {
+    Logger.log('Error in processFromCSV: ' + error.message);
+  }
+}
+
+
